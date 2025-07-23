@@ -2,7 +2,7 @@ const express = require('express');
 const app = express();
 // app.use(cors());
 app.get('/', (req, res) => {
-    res.send('hello, word!');
+    res.sendFile(__dirname + '/web-app/index.html');
 })
 
 const server = app.listen(3000, () => {
@@ -16,6 +16,7 @@ let rooms = {};
 let socketToRoom = {};
 
 io.on("connection", socket => {
+    console.log("user connected")
     socket.on("join", data => {
         // let a new user join to the room
         const roomId = data.room

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call</title>
+    <style>
+        #video-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        video {
+            width: 300px;
+            height: 225px;
+            background: #000;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        #controls {
+            margin: 20px 0;
+        }
+        #local-video {
+            transform: scaleX(-1); /* Flip for mirror effect */
+        }
+    </style>
+</head>
+<body>
+    <div>
+        <h1>Video Call</h1>
+        <div>
+            <label>Room ID: <input type="text" id="room-id"></label>
+            <label>Your Name: <input type="text" id="user-name"></label>
+            <button id="join-btn">Join Room</button>
+            <button id="leave-btn" disabled>Leave Room</button>
+        </div>
+        
+        <div id="controls">
+            <button id="camera-btn">Toggle Camera</button>
+            <button id="mic-btn">Toggle Mic</button>
+        </div>
+        
+        <div id="video-container">
+            <video id="local-video" autoplay muted playsinline></video>
+            <video id="remote-video" autoplay playsinline></video>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+        const roomIdInput = document.getElementById('room-id');
+        const userNameInput = document.getElementById('user-name');
+        const joinBtn = document.getElementById('join-btn');
+        const leaveBtn = document.getElementById('leave-btn');
+        const cameraBtn = document.getElementById('camera-btn');
+        const micBtn = document.getElementById('mic-btn');
+        const localVideo = document.getElementById('local-video');
+        const remoteVideo = document.getElementById('remote-video');
+        
+        let socket;
+        let localStream;
+        let remoteStream;
+        let peerConnection;
+        let roomId;
+        let userName;
+        
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+            ]
+        };
+        
+        // Initialize WebRTC
+        async function init() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: true
+                });
+                localVideo.srcObject = localStream;
+            } catch (err) {
+                console.error('Error accessing media devices:', err);
+            }
+        }
+        
+        // Create peer connection
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(configuration);
+            
+            // Add local stream
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+            
+            // Handle remote stream
+            peerConnection.ontrack = event => {
+                remoteStream = event.streams[0];
+                remoteVideo.srcObject = remoteStream;
+            };
+            
+            // Handle ICE candidates
+            peerConnection.onicecandidate = event => {
+                if (event.candidate) {
+                    socket.emit('candidate', event.candidate);
+                }
+            };
+        }
+        
+        // Join room
+        joinBtn.addEventListener('click', () => {
+            roomId = roomIdInput.value;
+            userName = userNameInput.value;
+            
+            if (!roomId || !userName) {
+                alert('Please enter room ID and your name');
+                return;
+            }
+            
+            socket = io('http://localhost:3000');
+            
+            socket.on('connect', () => {
+                console.log('Connected to signaling server');
+                socket.emit('join', { room: roomId, name: userName });
+            });
+            
+            socket.on('room_users', users => {
+                console.log("receive room_users. Length: "+users.length) // check lai cho nay, length luon = 1
+                if (users.length > 0) {
+                    createPeerConnection();
+                    createOffer();
+                }
+            });
+            
+            socket.on('getOffer', async offer => {
+                if (!peerConnection) createPeerConnection();
+                await peerConnection.setRemoteDescription(offer);
+                createAnswer();
+            });
+            
+            socket.on('getAnswer', answer => {
+                peerConnection.setRemoteDescription(answer);
+            });
+            
+            socket.on('getCandidate', candidate => {
+                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            });
+            
+            socket.on('user_exit', data => {
+                if (peerConnection) {
+                    peerConnection.close();
+                    peerConnection = null;
+                    remoteVideo.srcObject = null;
+                }
+            });
+            
+            joinBtn.disabled = true;
+            leaveBtn.disabled = false;
+        });
+        
+        // Leave room
+        leaveBtn.addEventListener('click', () => {
+            if (socket) socket.disconnect();
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            remoteVideo.srcObject = null;
+            joinBtn.disabled = false;
+            leaveBtn.disabled = true;
+        });
+        
+        // Toggle camera
+        cameraBtn.addEventListener('click', () => {
+            const videoTrack = localStream.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                cameraBtn.textContent = videoTrack.enabled ? 'Disable Camera' : 'Enable Camera';
+            }
+        });
+        
+        // Toggle mic
+        micBtn.addEventListener('click', () => {
+            const audioTrack = localStream.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                micBtn.textContent = audioTrack.enabled ? 'Mute Mic' : 'Unmute Mic';
+            }
+        });
+        
+        async function createOffer() {
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('offer', offer);
+        }
+        
+        async function createAnswer() {
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('answer', answer);
+        }
+        
+        // Initialize when page loads
+        init();
+    </script>
+</body>
+</html>
