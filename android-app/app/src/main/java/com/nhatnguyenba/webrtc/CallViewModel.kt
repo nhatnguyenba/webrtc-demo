@@ -20,6 +20,8 @@ import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
+import org.webrtc.PeerConnection.IceServer
+import org.webrtc.PeerConnection.RTCConfiguration
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
 import org.webrtc.SdpObserver
@@ -29,6 +31,7 @@ import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoTrack
 import java.net.URISyntaxException
+
 
 class CallViewModel : ViewModel() {
     private var socket: Socket? = null
@@ -79,7 +82,7 @@ class CallViewModel : ViewModel() {
     fun setupSocket() {
         try {
             Log.d("NHAT", "setUpSocket")
-            socket = IO.socket("http://192.168.206.88:3000")
+            socket = IO.socket("http://10.0.2.2:3000")
             socket?.on(Socket.EVENT_CONNECT) {
                 Log.d("Socket", "Connected")
                 Log.d("NHAT", "Socket Connected")
@@ -87,15 +90,15 @@ class CallViewModel : ViewModel() {
                 viewModelScope.launch {
                     if (args[0] != null) {
                         val users = args[0] as JSONArray
-                        if (users.length() > 0) {
-                            createPeerConnection()
-                            createOffer()
-                        }
+                        Log.d("NHAT", "Users list: $users")
+                        createPeerConnection()
+                        if (users.length() > 0) createOffer()
                     }
                 }
             }?.on("getOffer") { args ->
                 viewModelScope.launch {
                     val offerJson = args[0] as JSONObject
+                    Log.d("NHAT", "getOffer: $offerJson")
                     val sdp = SessionDescription(
                         SessionDescription.Type.OFFER,
                         offerJson.getString("sdp")
@@ -105,6 +108,7 @@ class CallViewModel : ViewModel() {
             }?.on("getAnswer") { args ->
                 viewModelScope.launch {
                     val answerJson = args[0] as JSONObject
+                    Log.d("NHAT", "getAnswer: $answerJson")
                     val sdp = SessionDescription(
                         SessionDescription.Type.ANSWER,
                         answerJson.getString("sdp")
@@ -114,6 +118,7 @@ class CallViewModel : ViewModel() {
             }?.on("getCandidate") { args ->
                 viewModelScope.launch {
                     val candidateJson = args[0] as JSONObject
+                    Log.d("NHAT", "getCandidate: $candidateJson")
                     val iceCandidate = IceCandidate(
                         candidateJson.getString("id"),
                         candidateJson.getInt("label"),
@@ -132,6 +137,7 @@ class CallViewModel : ViewModel() {
                     remoteStreamAvailable.value = false
                 }
             }
+            Log.d("NHAT", "setUpSocket socket=$socket")
             socket?.connect()
         } catch (e: URISyntaxException) {
             e.printStackTrace()
@@ -180,7 +186,11 @@ class CallViewModel : ViewModel() {
     }
 
     private fun createPeerConnection() {
-        val rtcConfig = PeerConnection.RTCConfiguration(arrayListOf())
+        Log.d("NHAT", "createPeerConnection")
+        val rtcConfig = RTCConfiguration(ArrayList())
+        rtcConfig.iceServers.add(
+            IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
+        )
         peerConnection = peerConnectionFactory?.createPeerConnection(
             rtcConfig,
             object : PeerConnectionObserver() {
@@ -218,12 +228,18 @@ class CallViewModel : ViewModel() {
 
             videoCapturer = createCameraCapturer(surfaceViewRenderer.context)
             videoCapturer?.let { capturer ->
-                val surfaceTextureHelper = SurfaceTextureHelper.create("CaptureThread", eglBase?.eglBaseContext)
+                val surfaceTextureHelper =
+                    SurfaceTextureHelper.create("CaptureThread", eglBase?.eglBaseContext)
                 val videoSource = peerConnectionFactory?.createVideoSource(capturer.isScreencast)
-                capturer.initialize(surfaceTextureHelper, surfaceViewRenderer.context, videoSource?.capturerObserver)
+                capturer.initialize(
+                    surfaceTextureHelper,
+                    surfaceViewRenderer.context,
+                    videoSource?.capturerObserver
+                )
                 capturer.startCapture(1280, 720, 30)
 
-                localVideoTrack = peerConnectionFactory?.createVideoTrack("local_video_track", videoSource)
+                localVideoTrack =
+                    peerConnectionFactory?.createVideoTrack("local_video_track", videoSource)
                 localVideoTrack?.addSink(surfaceViewRenderer)
                 peerConnection?.addTrack(localVideoTrack)
             }
@@ -249,6 +265,7 @@ class CallViewModel : ViewModel() {
     }
 
     private fun createOffer() {
+        Log.d("NHAT", "createOffer")
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
@@ -259,19 +276,21 @@ class CallViewModel : ViewModel() {
                     override fun onCreateSuccess(p0: SessionDescription?) {
                     }
 
-                    override fun onSetSuccess() {}
+                    override fun onSetSuccess() {
+                        desc?.let {
+                            val offerJson = JSONObject().apply {
+                                put("type", it.type.canonicalForm())
+                                put("sdp", it.description)
+                            }
+                            socket?.emit("offer", offerJson)
+                        }
+                    }
+
                     override fun onCreateFailure(p0: String?) {
                     }
 
                     override fun onSetFailure(s: String?) {}
                 }, desc)
-                desc?.let {
-                    val offerJson = JSONObject().apply {
-                        put("type", it.type.canonicalForm())
-                        put("sdp", it.description)
-                    }
-                    socket?.emit("offer", offerJson)
-                }
             }
 
             override fun onSetFailure(p0: String?) {}
@@ -281,67 +300,100 @@ class CallViewModel : ViewModel() {
     }
 
     private fun handleOffer(offer: SessionDescription) {
+        Log.d("NHAT", "handleOffer: $offer")
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(p0: SessionDescription?) {
+                Log.d("NHAT", "handleOffer onCreateSuccess")
             }
 
             override fun onSetSuccess() {
+                Log.d("NHAT", "handleOffer onSetSuccess")
                 createAnswer()
             }
 
             override fun onCreateFailure(p0: String?) {
+                Log.d("NHAT", "handleOffer onCreateFailure: $p0")
             }
 
-            override fun onSetFailure(p0: String?) {}
+            override fun onSetFailure(p0: String?) {
+                Log.d("NHAT", "handleOffer onSetFailure: $p0")
+            }
         }, offer)
     }
 
     private fun createAnswer() {
+        Log.d("NHAT", "createAnswer")
+        Log.d("NHAT", "createAnswer peerConnection: $peerConnection")
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
         }
         peerConnection?.createAnswer(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {
+                Log.d("NHAT", "createAnswer onCreateSuccess: $desc")
                 peerConnection?.setLocalDescription(object : SdpObserver {
                     override fun onCreateSuccess(p0: SessionDescription?) {
+                        Log.d("NHAT", "createAnswer setLocalDescription onCreateSuccess")
                     }
 
-                    override fun onSetSuccess() {}
+                    override fun onSetSuccess() {
+                        Log.d("NHAT", "createAnswer setLocalDescription onSetSuccess")
+                        desc?.let {
+                            val answerJson = JSONObject().apply {
+                                put("type", it.type.canonicalForm())
+                                put("sdp", it.description)
+                            }
+                            Log.d("NHAT", "answerJson: $answerJson")
+                            socket?.emit("answer", answerJson)
+                        }
+                    }
+
                     override fun onCreateFailure(p0: String?) {
+                        Log.d("NHAT", "createAnswer setLocalDescription onCreateFailure")
                     }
 
-                    override fun onSetFailure(p0: String?) {}
-                }, desc)
-                desc?.let {
-                    val answerJson = JSONObject().apply {
-                        put("type", it.type.canonicalForm())
-                        put("sdp", it.description)
+                    override fun onSetFailure(p0: String?) {
+                        Log.d("NHAT", "createAnswer setLocalDescription onSetFailure")
                     }
-                    socket?.emit("answer", answerJson)
-                }
+                }, desc)
             }
 
-            override fun onSetFailure(p0: String?) {}
-            override fun onSetSuccess() {}
-            override fun onCreateFailure(p0: String?) {}
+            override fun onSetFailure(p0: String?) {
+                Log.d("NHAT", "createAnswer onSetFailure: $p0")
+            }
+
+            override fun onSetSuccess() {
+                Log.d("NHAT", "createAnswer onSetSuccess")
+            }
+
+            override fun onCreateFailure(p0: String?) {
+                Log.d("NHAT", "createAnswer onCreateFailure: $p0")
+            }
         }, constraints)
     }
 
     private fun handleAnswer(answer: SessionDescription) {
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(p0: SessionDescription?) {
+                Log.d("NHAT", "handleAnswer onCreateSuccess")
             }
 
-            override fun onSetSuccess() {}
+            override fun onSetSuccess() {
+                Log.d("NHAT", "handleAnswer onSetSuccess")
+            }
+
             override fun onCreateFailure(p0: String?) {
+                Log.d("NHAT", "handleAnswer onCreateFailure")
             }
 
-            override fun onSetFailure(p0: String?) {}
+            override fun onSetFailure(p0: String?) {
+                Log.d("NHAT", "handleAnswer onSetFailure")
+            }
         }, answer)
     }
 
     private fun addIceCandidate(candidate: IceCandidate) {
+        Log.d("NHAT", "addIceCandidate: $candidate")
         peerConnection?.addIceCandidate(candidate)
     }
 

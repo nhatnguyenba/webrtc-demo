@@ -38,17 +38,17 @@ io.on("connection", socket => {
 
     socket.on("offer", sdp => {
         socket.broadcast.emit("getOffer", sdp);
-        console.log("offer: " + socket.id);
+        console.log("offer: " + sdp + ", socketId: "+socket.id);
     });
 
     socket.on("answer", sdp => {
         socket.broadcast.emit("getAnswer", sdp);
-        console.log("answer: " + socket.id);
+        console.log("answer: " + sdp + ", socketId: "+socket.id);
     });
 
     socket.on("candidate", candidate => {
         socket.broadcast.emit("getCandidate", candidate);
-        console.log("candidate: " + socket.id);
+        console.log("candidate: " + candidate + ", socketId: "+socket.id);
     });
 
     socket.on("disconnect", () => {

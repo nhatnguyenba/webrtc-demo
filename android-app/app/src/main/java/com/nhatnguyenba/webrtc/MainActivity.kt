@@ -212,7 +212,9 @@ fun JoinForm(viewModel: CallViewModel) {
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = { viewModel.joinRoom() }) {
+        Button(onClick = {
+            viewModel.joinRoom()
+        }) {
             Text("Join Room")
         }
     }
@@ -254,7 +256,7 @@ fun VideoCallUI(viewModel: CallViewModel) {
             modifier = Modifier
                 .width(120.dp)
                 .height(160.dp)
-                .align(Alignment.BottomEnd)
+                .align(Alignment.TopEnd)
         )
 
         // Controls

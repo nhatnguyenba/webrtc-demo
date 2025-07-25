@@ -42,6 +42,7 @@ android {
 dependencies {
 
     implementation("io.getstream:stream-webrtc-android:1.3.8")
+//    implementation ("io.github.webrtc-sdk:android:125.6422.07")
 
     implementation("io.socket:socket.io-client:2.1.1")
 
