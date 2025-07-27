@@ -17,6 +17,7 @@ import org.webrtc.Camera2Enumerator
 import org.webrtc.DataChannel
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
+import org.webrtc.IceCandidateErrorEvent
 import org.webrtc.MediaConstraints
 import org.webrtc.MediaStream
 import org.webrtc.PeerConnection
@@ -24,11 +25,13 @@ import org.webrtc.PeerConnection.IceServer
 import org.webrtc.PeerConnection.RTCConfiguration
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.RtpReceiver
+import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
+import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 import java.net.URISyntaxException
 
@@ -40,6 +43,7 @@ class CallViewModel : ViewModel() {
     private var localVideoTrack: VideoTrack? = null
     private var remoteVideoTrack: VideoTrack? = null
     private var videoCapturer: VideoCapturer? = null
+    var remoteView: VideoSink? = null
     var eglBase: EglBase? = null
 
     val roomId = mutableStateOf("")
@@ -91,7 +95,7 @@ class CallViewModel : ViewModel() {
                     if (args[0] != null) {
                         val users = args[0] as JSONArray
                         Log.d("NHAT", "Users list: $users")
-                        createPeerConnection()
+                        if (peerConnection == null) createPeerConnection()
                         if (users.length() > 0) createOffer()
                     }
                 }
@@ -191,6 +195,16 @@ class CallViewModel : ViewModel() {
         rtcConfig.iceServers.add(
             IceServer.builder("stun:stun.l.google.com:19302").createIceServer()
         )
+        rtcConfig.iceServers.add(
+            IceServer.builder("turn:a.relay.metered.ca:443?transport=tcp")
+                .setUsername("83eebabf8b4cce9d5dbcb649")
+                .setPassword("2D7JvfkOQtBdYW3R").createIceServer()
+        )
+        rtcConfig.iceServers.add(
+            IceServer.builder("turn:relay1.expressturn.com:3480?transport=tcp")
+                .setUsername("000000002068945177")
+                .setPassword("xm2eE12fIB3S8kAe+FF7jeZE+M8=").createIceServer()
+        )
         peerConnection = peerConnectionFactory?.createPeerConnection(
             rtcConfig,
             object : PeerConnectionObserver() {
@@ -208,11 +222,46 @@ class CallViewModel : ViewModel() {
 
                 override fun onAddStream(mediaStream: MediaStream?) {
                     super.onAddStream(mediaStream)
+                    Log.d("NHAT", "onAddStream 1: $mediaStream")
                     mediaStream?.videoTracks?.firstOrNull()?.let {
+                        Log.d("NHAT", "onAddStream 2: $it")
                         remoteVideoTrack = it
                         remoteVideoTrack?.setEnabled(true)
+                        remoteVideoTrack?.addSink(remoteView)
                         remoteStreamAvailable.value = true
                     }
+                }
+
+                override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
+                    super.onConnectionChange(newState)
+                    Log.d("NHAT", "onConnectionChange: $newState")
+                    if (newState == PeerConnection.PeerConnectionState.CONNECTED) {
+                        Log.d("NHAT", "onConnectionChange: peerConnection=$peerConnection")
+                        Log.d("NHAT", "onConnectionChange: localVideoTrack=$localVideoTrack")
+                        peerConnection?.addTrack(localVideoTrack)
+                    }
+                }
+
+                override fun onSignalingChange(signalingState: PeerConnection.SignalingState?) {
+                    super.onSignalingChange(signalingState)
+                    Log.d("NHAT", "onSignalingChange: $signalingState")
+                }
+
+                override fun onIceConnectionChange(iceConnectionState: PeerConnection.IceConnectionState?) {
+                    super.onIceConnectionChange(iceConnectionState)
+                    Log.d("NHAT", "onIceConnectionChange: $iceConnectionState")
+                }
+
+                override fun onIceCandidateError(event: IceCandidateErrorEvent?) {
+                    super.onIceCandidateError(event)
+                    Log.d("NHAT", "onIceCandidateError: ${event?.errorText}")
+                }
+
+                override fun onTrack(transceiver: RtpTransceiver?) {
+                    super.onTrack(transceiver)
+                    // có thể lấy data từ remote ở đây và set vào SurfaceViewRenderer
+                    Log.d("NHAT", "onTrack sender: ${transceiver?.sender?.streams}")
+//                    Log.d("NHAT", "onTrack receiver: ${transceiver?.receiver?.}")
                 }
             })
     }
@@ -241,7 +290,10 @@ class CallViewModel : ViewModel() {
                 localVideoTrack =
                     peerConnectionFactory?.createVideoTrack("local_video_track", videoSource)
                 localVideoTrack?.addSink(surfaceViewRenderer)
-                peerConnection?.addTrack(localVideoTrack)
+                if (peerConnection == null) createPeerConnection()
+                Log.d("NHAT", "startLocalVideoCapture peerConnection: $peerConnection")
+                Log.d("NHAT", "startLocalVideoCapture localVideoTrack: $localVideoTrack")
+                peerConnection?.addTrack(localVideoTrack) // peerConnection != null nhưng vẫn ko truyền đc video
             }
         } catch (e: Exception) {
             Log.e("CameraCapture", "Error starting camera: ${e.message}")

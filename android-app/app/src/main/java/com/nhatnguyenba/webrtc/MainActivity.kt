@@ -235,6 +235,7 @@ fun VideoCallUI(viewModel: CallViewModel) {
                         setEnableHardwareScaler(true)
                         setZOrderMediaOverlay(false)
                         remoteView = this
+                        viewModel.remoteView = this
                     }
                 },
                 modifier = Modifier.fillMaxSize()
