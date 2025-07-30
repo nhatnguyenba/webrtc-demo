@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.CameraFront
+import androidx.compose.material.icons.filled.CameraRear
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Videocam
@@ -33,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -224,23 +227,25 @@ fun JoinForm(viewModel: CallViewModel) {
 fun VideoCallUI(viewModel: CallViewModel) {
     var localView by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
     var remoteView by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
+    val cameraType by viewModel.cameraType.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // Remote video
-        if (viewModel.remoteStreamAvailable.value) {
+//        if (viewModel.remoteStreamAvailable.value) {
             AndroidView(
                 factory = { context ->
                     SurfaceViewRenderer(context).apply {
                         init(viewModel.eglBase?.eglBaseContext, null)
                         setEnableHardwareScaler(true)
-                        setZOrderMediaOverlay(false)
+                        setMirror(false)
                         remoteView = this
                         viewModel.remoteView = this
+//                        viewModel.addRemoteViewToVideoTrack(this)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
             )
-        }
+//        }
 
         // Local video (small overlay)
         AndroidView(
@@ -291,6 +296,14 @@ fun VideoCallUI(viewModel: CallViewModel) {
                 Icon(
                     if (viewModel.isMicOn.value) Icons.Filled.Mic else Icons.Filled.MicOff,
                     contentDescription = "Toggle Mic"
+                )
+            }
+
+            IconButton(onClick = { viewModel.switchCamera() }) {
+                Icon(
+                    imageVector = if (cameraType == CallViewModel.CameraType.FRONT) Icons.Default.CameraRear else Icons.Default.CameraFront,
+                    contentDescription = "Switch Camera",
+                    tint = Color.White
                 )
             }
         }

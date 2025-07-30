@@ -9,12 +9,17 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import io.socket.client.IO
 import io.socket.client.Socket
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.AudioSource
 import org.webrtc.AudioTrack
 import org.webrtc.Camera1Enumerator
+import org.webrtc.Camera2Capturer
 import org.webrtc.Camera2Enumerator
 import org.webrtc.DataChannel
 import org.webrtc.EglBase
@@ -64,6 +69,16 @@ class CallViewModel : ViewModel() {
     val hasAudioPermission = mutableStateOf(false)
     val shouldShowPermissionDialog = mutableStateOf(false)
 
+    val hasTrack = MutableStateFlow(false)
+
+    private val _cameraType = MutableStateFlow(CameraType.FRONT)
+    val cameraType: StateFlow<CameraType> = _cameraType
+
+    fun addRemoteViewToVideoTrack(view: VideoSink) {
+        Log.d("NHAT", "addRemoteViewToVideoTrack remoteVideoTrack: $remoteVideoTrack")
+        remoteVideoTrack?.addSink(view)
+    }
+
     fun checkPermissions(context: Context) {
         hasCameraPermission.value = ContextCompat.checkSelfPermission(
             context,
@@ -103,7 +118,11 @@ class CallViewModel : ViewModel() {
                         val users = args[0] as JSONArray
                         Log.d("NHAT", "Users list: $users")
                         if (peerConnection == null) createPeerConnection()
-                        if (users.length() > 0) createOffer()
+                        if (users.length() > 0) {
+                            hasTrack.collect {
+                                if (it) createOffer()
+                            }
+                        }
                     }
                 }
             }?.on("getOffer") { args ->
@@ -196,6 +215,14 @@ class CallViewModel : ViewModel() {
         isMicOn.value = !isMicOn.value
     }
 
+    fun switchCamera() {
+        (videoCapturer as? Camera2Capturer)?.switchCamera(null)
+        _cameraType.value = when (_cameraType.value) {
+            CameraType.FRONT -> CameraType.BACK
+            CameraType.BACK -> CameraType.FRONT
+        }
+    }
+
     private fun createPeerConnection() {
         Log.d("NHAT", "createPeerConnection")
         val rtcConfig = RTCConfiguration(ArrayList())
@@ -246,6 +273,15 @@ class CallViewModel : ViewModel() {
                         Log.d("NHAT", "onConnectionChange: peerConnection=$peerConnection")
                         Log.d("NHAT", "onConnectionChange: localVideoTrack=$localVideoTrack")
                     }
+                    if (newState == PeerConnection.PeerConnectionState.CONNECTED) {
+                        // Kết nối đã thành công, media sắp bắt đầu chảy.
+                        // Đây là thời điểm tuyệt vời để chủ động tìm và hiển thị remote track.
+                        viewModelScope.launch {
+                            withContext(Dispatchers.Main){
+                                displayRemoteVideoFromTransceivers(peerConnection)
+                            }
+                        }
+                    }
                 }
 
                 override fun onSignalingChange(signalingState: PeerConnection.SignalingState?) {
@@ -265,11 +301,37 @@ class CallViewModel : ViewModel() {
 
                 override fun onTrack(transceiver: RtpTransceiver?) {
                     super.onTrack(transceiver)
-                    // có thể lấy data từ remote ở đây và set vào SurfaceViewRenderer
-                    Log.d("NHAT", "onTrack sender: ${transceiver?.sender?.streams}")
-//                    Log.d("NHAT", "onTrack receiver: ${transceiver?.receiver?.}")
+                    val track = transceiver?.receiver?.track()
+                    if (track is VideoTrack) {
+                        // Đã nhận được video track từ peer kia
+                        remoteVideoTrack = track
+                        remoteVideoTrack?.setEnabled(true)
+                        Log.d("NHAT", "onTrack remoteView: $remoteView")
+                        // remoteView là một SurfaceViewRenderer trong layout của bạn
+                        remoteView?.let { remoteVideoTrack?.addSink(remoteView) }
+                    }
                 }
             })
+    }
+
+    private fun displayRemoteVideoFromTransceivers(peerConnection: PeerConnection?) {
+        if (peerConnection == null) return
+
+        for (transceiver in peerConnection.transceivers) {
+            val receiver = transceiver.receiver
+            val track = receiver.track()
+
+            if (track is VideoTrack) {
+                Log.d("NHAT", "displayRemoteVideoFromTransceivers track: $track")
+                remoteVideoTrack = track
+                remoteVideoTrack?.setEnabled(true)
+                if (remoteVideoTrack?.enabled() == true) {
+                    Log.d("NHAT", "displayRemoteVideoFromTransceivers remoteView: $remoteView")
+                    remoteVideoTrack?.addSink(remoteView)
+                    break
+                }
+            }
+        }
     }
 
     fun startLocalVideoCapture(surfaceViewRenderer: SurfaceViewRenderer) {
@@ -296,7 +358,8 @@ class CallViewModel : ViewModel() {
 
                 localVideoTrack =
                     peerConnectionFactory?.createVideoTrack("local_video_track", videoSource)
-                localAudioTrack = peerConnectionFactory?.createAudioTrack("local_audio_track", audioSource)
+                localAudioTrack =
+                    peerConnectionFactory?.createAudioTrack("local_audio_track", audioSource)
                 localVideoTrack?.addSink(surfaceViewRenderer)
                 if (peerConnection == null) createPeerConnection()
                 Log.d("NHAT", "startLocalVideoCapture peerConnection: $peerConnection")
@@ -304,6 +367,7 @@ class CallViewModel : ViewModel() {
                 peerConnection?.addTrack(localVideoTrack)
                 peerConnection?.addTrack(localAudioTrack)
                 Log.d("NHAT", "startLocalVideoCapture hasVideoTrack=${hasTrack(peerConnection!!)}")
+                hasTrack.value = hasTrack(peerConnection!!)
             }
         } catch (e: Exception) {
             Log.e("CameraCapture", "Error starting camera: ${e.message}")
@@ -373,10 +437,12 @@ class CallViewModel : ViewModel() {
                 Log.d("NHAT", "handleOffer onSetSuccess")
                 localVideoTrack =
                     peerConnectionFactory?.createVideoTrack("local_video_track", videoSource)
-                localAudioTrack = peerConnectionFactory?.createAudioTrack("local_audio_track", audioSource)
+                localAudioTrack =
+                    peerConnectionFactory?.createAudioTrack("local_audio_track", audioSource)
                 peerConnection?.addTrack(localVideoTrack)
                 peerConnection?.addTrack(localAudioTrack)
                 Log.d("NHAT", "handleOffer hasVideoTrack=${hasTrack(peerConnection!!)}")
+                hasTrack.value = hasTrack(peerConnection!!)
                 createAnswer()
             }
 
@@ -491,4 +557,6 @@ class CallViewModel : ViewModel() {
         override fun onRenegotiationNeeded() {}
         override fun onAddTrack(rtpReceiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {}
     }
+
+    enum class CameraType { FRONT, BACK }
 }
