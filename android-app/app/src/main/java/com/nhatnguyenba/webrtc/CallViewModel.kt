@@ -12,6 +12,8 @@ import io.socket.client.Socket
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import org.webrtc.AudioSource
+import org.webrtc.AudioTrack
 import org.webrtc.Camera1Enumerator
 import org.webrtc.Camera2Enumerator
 import org.webrtc.DataChannel
@@ -32,16 +34,21 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSink
+import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.net.URISyntaxException
 
 
 class CallViewModel : ViewModel() {
+    private var audioSource: AudioSource? = null
+    private var videoSource: VideoSource? = null
     private var socket: Socket? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var localVideoTrack: VideoTrack? = null
     private var remoteVideoTrack: VideoTrack? = null
+    private var localAudioTrack: AudioTrack? = null
+    private val remoteAudioTrack: AudioTrack? = null
     private var videoCapturer: VideoCapturer? = null
     var remoteView: VideoSink? = null
     var eglBase: EglBase? = null
@@ -227,7 +234,7 @@ class CallViewModel : ViewModel() {
                         Log.d("NHAT", "onAddStream 2: $it")
                         remoteVideoTrack = it
                         remoteVideoTrack?.setEnabled(true)
-                        remoteVideoTrack?.addSink(remoteView)
+                        remoteView?.let { view -> remoteVideoTrack?.addSink(view) }
                         remoteStreamAvailable.value = true
                     }
                 }
@@ -238,7 +245,6 @@ class CallViewModel : ViewModel() {
                     if (newState == PeerConnection.PeerConnectionState.CONNECTED) {
                         Log.d("NHAT", "onConnectionChange: peerConnection=$peerConnection")
                         Log.d("NHAT", "onConnectionChange: localVideoTrack=$localVideoTrack")
-                        peerConnection?.addTrack(localVideoTrack)
                     }
                 }
 
@@ -279,7 +285,8 @@ class CallViewModel : ViewModel() {
             videoCapturer?.let { capturer ->
                 val surfaceTextureHelper =
                     SurfaceTextureHelper.create("CaptureThread", eglBase?.eglBaseContext)
-                val videoSource = peerConnectionFactory?.createVideoSource(capturer.isScreencast)
+                videoSource = peerConnectionFactory?.createVideoSource(capturer.isScreencast)
+                audioSource = peerConnectionFactory?.createAudioSource(MediaConstraints())
                 capturer.initialize(
                     surfaceTextureHelper,
                     surfaceViewRenderer.context,
@@ -289,11 +296,14 @@ class CallViewModel : ViewModel() {
 
                 localVideoTrack =
                     peerConnectionFactory?.createVideoTrack("local_video_track", videoSource)
+                localAudioTrack = peerConnectionFactory?.createAudioTrack("local_audio_track", audioSource)
                 localVideoTrack?.addSink(surfaceViewRenderer)
                 if (peerConnection == null) createPeerConnection()
                 Log.d("NHAT", "startLocalVideoCapture peerConnection: $peerConnection")
                 Log.d("NHAT", "startLocalVideoCapture localVideoTrack: $localVideoTrack")
-                peerConnection?.addTrack(localVideoTrack) // peerConnection != null nhưng vẫn ko truyền đc video
+                peerConnection?.addTrack(localVideoTrack)
+                peerConnection?.addTrack(localAudioTrack)
+                Log.d("NHAT", "startLocalVideoCapture hasVideoTrack=${hasTrack(peerConnection!!)}")
             }
         } catch (e: Exception) {
             Log.e("CameraCapture", "Error starting camera: ${e.message}")
@@ -318,6 +328,7 @@ class CallViewModel : ViewModel() {
 
     private fun createOffer() {
         Log.d("NHAT", "createOffer")
+        Log.d("NHAT", "createOffer hasVideoTrack: ${hasTrack(peerConnection!!)}")
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
@@ -360,6 +371,12 @@ class CallViewModel : ViewModel() {
 
             override fun onSetSuccess() {
                 Log.d("NHAT", "handleOffer onSetSuccess")
+                localVideoTrack =
+                    peerConnectionFactory?.createVideoTrack("local_video_track", videoSource)
+                localAudioTrack = peerConnectionFactory?.createAudioTrack("local_audio_track", audioSource)
+                peerConnection?.addTrack(localVideoTrack)
+                peerConnection?.addTrack(localAudioTrack)
+                Log.d("NHAT", "handleOffer hasVideoTrack=${hasTrack(peerConnection!!)}")
                 createAnswer()
             }
 
@@ -371,6 +388,18 @@ class CallViewModel : ViewModel() {
                 Log.d("NHAT", "handleOffer onSetFailure: $p0")
             }
         }, offer)
+    }
+
+    private fun hasTrack(peerConnection: PeerConnection): Boolean {
+        // Lấy danh sách tất cả các RtpSender
+        val senders = peerConnection.senders
+
+        // Tìm xem có sender nào đang quản lý một VideoTrack không
+        return senders.any { sender ->
+            sender.track() is VideoTrack
+        } && senders.any { sender ->
+            sender.track() is AudioTrack
+        }
     }
 
     private fun createAnswer() {
